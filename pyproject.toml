@@ -1,0 +1,56 @@
+[project]
+name = "concept-shift"
+version = "0.1.0"
+description = "Concept-shift pipeline: Replogle K562-essential CRISPRi screen x AlphaGenome state-blind baseline."
+authors = [{ name = "Alan Murphy" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Core data dependencies. These are ALL the scFM team needs to run
+# `concept_shift.data` (load + filter + pseudobulk + relevant gene sets).
+# Deliberately free of torch / AlphaGenome so the data module stays importable
+# on a light environment.
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "anndata",
+    "scanpy",
+    "pertpy",
+    "filelock",
+]
+
+[project.optional-dependencies]
+# AlphaGenome baseline (spec steps 7-8). Uses the pytorch port + local weights
+# (gtca/alphagenome_pytorch), reusing the seq2func_crispri_eval track-selection
+# and aggregation logic. Only needed to (re)generate ag_k562_baseline.parquet.
+alphagenome = [
+    "torch",
+    "pysam",
+    "tangermeme",
+    "alphagenome-pytorch",
+    "huggingface_hub",
+    "safetensors",
+]
+plotting = ["matplotlib", "seaborn"]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["concept_shift"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:pandas",
+    "ignore::DeprecationWarning:numpy",
+]
+
+[tool.uv]
+# Install the project itself editable into the managed venv.
+package = true

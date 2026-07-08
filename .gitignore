@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.python-version
+
+# uv / venv
+.venv/
+venv/
+env/
+
+# Genomes (cached locally per-build by concept_shift.seq)
+.cache/
+*.fa
+*.fa.gz
+*.fa.fai
+*.fai
+
+# Pipeline artifacts (regenerate, don't commit). Small summary tables are re-included below.
+out/**
+results/**
+*.png
+*.pdf
+*.h5ad
+
+# Large cached AnnData / prediction tables
+*.parquet
+
+# Re-include the shipped K562 track metadata (small; needed for AG track selection)
+!metadata/track_metadata.parquet
+
+# Re-include small summary tables kept as supplementary data
+!results/**/
+!results/**/*_summary.txt
+!results/**/*_summary.csv
+!out/**/
+!out/knockdown_check.csv
+
+# Models
+models/
+*.ckpt
+*.safetensors
+*.pth
+*.pt
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Notebooks
+.ipynb_checkpoints/
