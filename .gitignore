@@ -55,3 +55,6 @@ models/
 
 # Notebooks
 .ipynb_checkpoints/
+
+# Logs
+logs/

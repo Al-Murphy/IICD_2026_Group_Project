@@ -122,20 +122,29 @@ def _to_dense(x) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Step 1 -- load
 # ---------------------------------------------------------------------------
+# scPerturb-hosted Replogle 2022 K562 essential screen (1.44 GB).
+# NOTE: do NOT use pertpy.dt.replogle_2022_k562_essential() -- in pertpy 1.0.3
+# that function is bugged and downloads the Gasperini 2019 at-scale file instead
+# (verified in its source). We fetch the canonical scPerturb file directly.
+REPLOGLE_ESSENTIAL_URL = (
+    "https://zenodo.org/records/13350497/files/"
+    "ReplogleWeissman2022_K562_essential.h5ad?download=1"
+)
+
+
 def load_replogle(cache_h5ad: Optional[str] = None):
-    """Load the Replogle 2022 K562-essential screen via pertpy.
+    """Load the Replogle 2022 K562-essential screen (scPerturb).
 
     Parameters
     ----------
     cache_h5ad : str, optional
-        If given and the file exists, load from there (fast). Otherwise fetch
-        via ``pertpy.data.replogle_2022_k562_essential()`` and, if a path was
-        given, write it out for next time.
+        If given and present, load from there (fast). Otherwise download the
+        canonical scPerturb h5ad to that path and load it.
 
     Returns
     -------
     AnnData
-        310,385 cells x 8,563 genes (unfiltered).
+        ~310k cells x ~8.5k genes (unfiltered), clean single-gene CRISPRi screen.
     """
     import anndata as ad
 
@@ -143,15 +152,13 @@ def load_replogle(cache_h5ad: Optional[str] = None):
         print(f"[data] loading cached AnnData: {cache_h5ad}")
         return ad.read_h5ad(cache_h5ad)
 
-    import pertpy as pt
+    import urllib.request
 
-    print("[data] fetching pertpy.data.replogle_2022_k562_essential() ...")
-    adata = pt.data.replogle_2022_k562_essential()
-    if cache_h5ad:
-        os.makedirs(os.path.dirname(os.path.abspath(cache_h5ad)), exist_ok=True)
-        print(f"[data] caching raw AnnData -> {cache_h5ad}")
-        adata.write_h5ad(cache_h5ad)
-    return adata
+    dest = cache_h5ad or "./ReplogleWeissman2022_K562_essential.h5ad"
+    os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+    print(f"[data] downloading Replogle K562-essential (scPerturb, 1.44 GB) -> {dest}")
+    urllib.request.urlretrieve(REPLOGLE_ESSENTIAL_URL, dest)
+    return ad.read_h5ad(dest)
 
 
 # ---------------------------------------------------------------------------

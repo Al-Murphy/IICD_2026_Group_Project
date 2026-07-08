@@ -41,8 +41,8 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--out_dir", default="./out")
-    p.add_argument("--raw_h5ad", default="./out/replogle_k562_raw.h5ad",
-                   help="Raw pertpy download cache. Set '' to always re-fetch.")
+    p.add_argument("--raw_h5ad", default="./out/ReplogleWeissman2022_K562_essential.h5ad",
+                   help="Raw scPerturb Replogle h5ad. Downloaded from Zenodo if absent.")
     p.add_argument("--filtered_h5ad", default="./out/replogle_k562_filtered.h5ad",
                    help="Filtered+normalised AnnData cache (loaded if present).")
     p.add_argument("--min_cells", type=int, default=data.DEFAULT_MIN_CELLS)
