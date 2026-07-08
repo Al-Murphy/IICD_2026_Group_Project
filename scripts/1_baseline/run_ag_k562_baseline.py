@@ -2,21 +2,41 @@
 """
 Step 1 -- AlphaGenome K562 baseline: ONE prediction per gene (spec step 7).
 
-AlphaGenome is state-blind, so this is computed once per gene and reused across
-all perturbations. A single forward pass yields both proxies:
+AlphaGenome is state-blind: a knockdown changes no downstream gene's sequence,
+so its predicted expression is the SAME whether we are in the control state or
+any perturbed state. We therefore run it once per gene over ALL ~8.5k genes with
+valid hg38 coordinates and save the result keyed by gene name, so it can be
+compared against BOTH:
+
+    * the control pseudobulk vector          (within-state accuracy; step 3a), and
+    * every perturbation's pseudobulk row     (the measured delta is the signal;
+                                               AlphaGenome's predicted delta == 0).
+
+A single forward pass per gene yields both proxies:
 
     cage_pred  (PRIMARY)   sense-strand CAGE/PRO-cap integrated over TSS +/- window
     rna_pred   (SECONDARY) sense-strand RNA-Seq integrated over the gene body
 
-Writes ``out/ag_k562_baseline.parquet`` (index = gene var_name). Resumable:
-re-running skips genes already present. Shardable for SLURM arrays.
+This baseline is deliberately UNFILTERED and perturbation-independent -- it is
+just the per-gene K562 prediction. Any trans-effect filtering is applied later
+at comparison time (step 2): for a given perturbation we exclude that
+perturbation's own target gene (and, optionally, its cis neighbours) from the
+gene set, because we are interested in trans effects only. Nothing is dropped
+here, so every filtering choice stays open downstream.
+
+Output (``out/ag_k562_baseline.parquet``): index = gene var_name, columns
+``[cage_pred, rna_pred, chrom, tss, strand]`` (coords carried for easy joins).
+Resumable (re-running skips genes already present) and shardable for SLURM arrays.
 
 Requires the ``[alphagenome]`` extra (torch, pysam, tangermeme, alphagenome-pytorch).
 
 Usage
 -----
-    # Full run (downloads hg38 + AG weights on first use)
+    # Full run over all valid-coord genes (downloads hg38 + AG weights on first use)
     python scripts/1_baseline/run_ag_k562_baseline.py
+
+    # Report coverage against the pseudobulk gene set as well
+    python scripts/1_baseline/run_ag_k562_baseline.py --pseudobulk out/pseudobulk.parquet
 
     # One shard of an 8-way SLURM array
     python scripts/1_baseline/run_ag_k562_baseline.py \
@@ -41,7 +61,11 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--coords", default="./out/coords.parquet",
-                   help="Strand-aware coord table from step 0 (index=var_name).")
+                   help="Strand-aware coord table from step 0 (index=var_name). "
+                        "Defines the ~8.5k valid-hg38 genes to predict.")
+    p.add_argument("--pseudobulk", default=None,
+                   help="Optional pseudobulk.parquet; if given, report how many of "
+                        "its genes have an AlphaGenome prediction (comparison coverage).")
     p.add_argument("--output", default="./out/ag_k562_baseline.parquet")
     p.add_argument("--metadata_path", default="./metadata/track_metadata.parquet")
     p.add_argument("--backbone_model_path", default=None,
@@ -93,7 +117,7 @@ def main():
     records = dict(done)
 
     def flush():
-        pd.DataFrame(records).T.rename_axis("gene").to_parquet(args.output)
+        pd.DataFrame.from_dict(records, orient="index").rename_axis("gene").to_parquet(args.output)
 
     for i, g in enumerate(tqdm(todo, desc="genes")):
         row = coords.loc[g]
@@ -108,12 +132,27 @@ def main():
         except Exception as exc:  # noqa: BLE001 -- keep the sweep alive; log the gene
             print(f"[baseline] WARN gene {g}: {exc}")
             cage, rna = np.nan, np.nan
-        records[g] = {"cage_pred": cage, "rna_pred": rna}
+        # Carry coords so the baseline joins cleanly against the pseudobulk by
+        # gene name and is self-describing for downstream trans filtering.
+        records[g] = {
+            "cage_pred": cage, "rna_pred": rna,
+            "chrom": str(row["chr"]), "tss": int(row["tss"]), "strand": str(row["strand"]),
+        }
         if (i + 1) % args.save_every == 0:
             flush()
 
     flush()
     print(f"[baseline] wrote {len(records)} gene predictions -> {args.output}")
+
+    # --- coverage against the pseudobulk gene set ----------------------------
+    if args.pseudobulk and os.path.exists(args.pseudobulk):
+        pb = pd.read_parquet(args.pseudobulk)
+        predicted = set(records)
+        pb_genes = set(pb.columns)
+        covered = pb_genes & predicted
+        print(f"[baseline] pseudobulk coverage: {len(covered)}/{len(pb_genes)} genes "
+              f"have an AlphaGenome prediction "
+              f"({len(pb_genes - predicted)} lack valid hg38 coords, no prediction).")
 
 
 if __name__ == "__main__":
