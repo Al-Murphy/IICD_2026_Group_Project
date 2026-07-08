@@ -139,7 +139,7 @@ def predict_gene(model, loader, device, chrom, tss, strand, gstart, gend,
     """
     import torch
 
-    x = loader.get_seq(chrom, int(tss), strand, ohe=True)  # (1, 4, rf)
+    x = loader.get_seq(chrom, int(tss), strand, ohe=True)  # (1, rf, 4) NLC
     out = _forward(model, x, device, organism_index=organism_index)
 
     for key in ("cage", "rna_seq"):

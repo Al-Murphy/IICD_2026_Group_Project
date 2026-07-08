@@ -1,31 +1,96 @@
-#!/usr/bin/env bash
-# SLURM array template for the AlphaGenome K562 baseline (step 1).
-# Each array task predicts genes[shard_idx::num_shards] and writes a shard parquet;
-# the resume logic makes re-queued tasks cheap. Set partition/QOS/GPU for your cluster.
+#!/bin/bash
+# SLURM array: AlphaGenome K562 baseline for the IICD concept-shift project.
 #
-#   sbatch --array=0-7 examples/slurm_ag_baseline_array.sh
+# AlphaGenome is state-blind, so we predict ONCE per gene (8,545 genes with valid
+# hg38 coords) and reuse that baseline across all 1,971 perturbations -- the
+# predicted delta for every (perturbation, gene) pair is exactly 0. There are NO
+# per-perturbation forward passes here.
 #
-# After all shards finish, concatenate the shard parquets into one baseline:
-#   .venv/bin/python - <<'PY'
-#   import glob, pandas as pd
-#   parts = [pd.read_parquet(f) for f in glob.glob("out/ag_k562_baseline_shard*of8.parquet")]
-#   pd.concat(parts).to_parquet("out/ag_k562_baseline.parquet")
-#   PY
-
-#SBATCH --job-name=ag_k562_baseline
-#SBATCH --partition=gpu             # <- set for your cluster
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=48G
-#SBATCH --time=08:00:00
-#SBATCH --output=logs/ag_baseline_%A_%a.out
+# Each array task predicts genes[shard_idx::NUM_SHARDS] and writes one shard
+# parquet (resumable: a re-queued task skips genes already present in its shard).
+# Merge after all tasks finish (command at the bottom).
+#
+# Submit: sbatch /grid/koo/home/amurphy/projects/job_scripts/iicd_ag_k562_baseline_array.sh
+#
+#SBATCH --job-name=iicd_ag_k562_baseline
+#SBATCH --output=/grid/koo/home/amurphy/projects/job_scripts/out/iicd_ag_k562_baseline_%A_%a.out
+#SBATCH --error=/grid/koo/home/amurphy/projects/job_scripts/out/iicd_ag_k562_baseline_%A_%a.err
+#SBATCH --time=48:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:h100:1
+#SBATCH --mem=96G
+#SBATCH --qos=koolab
+#SBATCH --partition=kooq
+#SBATCH --mail-type=END,FAIL
+#SBATCH --mail-user=amurphy@cshl.edu
+#SBATCH --export=ALL
+#SBATCH --array=0-7          # NUM_SHARDS - 1  (8 shards x ~1,069 genes each)
 
 set -euo pipefail
-cd "$SLURM_SUBMIT_DIR"
-mkdir -p logs
 
 NUM_SHARDS=8
-.venv/bin/python scripts/1_baseline/run_ag_k562_baseline.py \
-    --num_shards "$NUM_SHARDS" \
-    --shard_idx "$SLURM_ARRAY_TASK_ID" \
-    --output "out/ag_k562_baseline_shard${SLURM_ARRAY_TASK_ID}of${NUM_SHARDS}.parquet"
+
+echo "Job ID: ${SLURM_JOB_ID:-}  Array task: ${SLURM_ARRAY_TASK_ID:-}"
+echo "Node: ${SLURM_JOB_NODELIST:-}"
+echo "Start time: $(date)"
+echo "GPUs: ${CUDA_VISIBLE_DEVICES:-}"
+
+# AlphaGenome pytorch port (local weights, gtca/alphagenome_pytorch all-folds).
+# We do NOT use the official API -- no rate limits, no key.
+cd /grid/koo/home/amurphy/projects/alphagenome-pytorch
+source .venv/bin/activate
+
+PROJ_ROOT="${PROJ_ROOT:-/grid/koo/home/amurphy/projects/IICD_2026_Group_Project}"
+cd "${PROJ_ROOT}"
+
+# concept_shift lives in this repo but is not installed into the AG venv;
+# expose it on the path instead of polluting that env with pertpy/scanpy.
+export PYTHONPATH="${PROJ_ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:+$PYTORCH_CUDA_ALLOC_CONF,}expandable_segments:True"
+
+mkdir -p out /grid/koo/home/amurphy/projects/job_scripts/out
+
+COORDS="${COORDS:-${PROJ_ROOT}/out/coords.parquet}"
+METADATA_PATH="${METADATA_PATH:-${PROJ_ROOT}/metadata/track_metadata.parquet}"
+GENOME_CACHE="${GENOME_CACHE:-${PROJ_ROOT}/.cache}"   # hg38.fa symlinked from clg/.cache
+SHARD_OUT="${PROJ_ROOT}/out/ag_k562_baseline_shard${SLURM_ARRAY_TASK_ID}of${NUM_SHARDS}.parquet"
+
+# Preflight: fail fast with a clear message rather than 8 GPUs dying on a missing file.
+[[ -f "${COORDS}" ]]        || { echo "ERROR: missing ${COORDS} (run scripts/0_preprocess/prepare_data.py)"; exit 1; }
+[[ -f "${METADATA_PATH}" ]] || { echo "ERROR: missing ${METADATA_PATH}"; exit 1; }
+[[ -e "${GENOME_CACHE}/hg38.fa" ]] || { echo "ERROR: missing ${GENOME_CACHE}/hg38.fa (symlink it; do not let 8 shards race to download)"; exit 1; }
+
+srun python scripts/1_baseline/run_ag_k562_baseline.py \
+  --coords "${COORDS}" \
+  --metadata_path "${METADATA_PATH}" \
+  --genome_cache "${GENOME_CACHE}" \
+  --genome_build hg38 \
+  --num_shards "${NUM_SHARDS}" \
+  --shard_idx "${SLURM_ARRAY_TASK_ID}" \
+  --output "${SHARD_OUT}" \
+  --save_every 200
+
+deactivate
+echo "End time: $(date)"
+
+# =============================================================================
+# After ALL array tasks finish, merge the shards (CPU is fine). Uses the project
+# venv (pandas) and reports coverage against the pseudobulk gene set:
+#
+#   cd /grid/koo/home/amurphy/projects/IICD_2026_Group_Project
+#   .venv/bin/python - <<'PY'
+#   import glob, pandas as pd
+#   parts = [pd.read_parquet(f) for f in sorted(glob.glob("out/ag_k562_baseline_shard*of8.parquet"))]
+#   base = pd.concat(parts).rename_axis("gene")
+#   base.to_parquet("out/ag_k562_baseline.parquet")
+#   pb = pd.read_parquet("out/pseudobulk.parquet")
+#   covered = len(set(pb.columns) & set(base.index))
+#   print(f"merged {len(base)} gene predictions from {len(parts)} shards")
+#   print(f"pseudobulk coverage: {covered}/{len(pb.columns)} genes")
+#   print(base.head())
+#   PY
+#
+# Then run the mandatory controls (within-state Spearman + Wasserstein):
+#   .venv/bin/python scripts/3_controls/run_controls.py
+# =============================================================================

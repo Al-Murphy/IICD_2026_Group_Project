@@ -38,7 +38,11 @@ def get_genome(build: str, lcl_path: str = "./.cache", force: bool = False) -> s
 
 
 def reverse_complement(seq):
-    """Reverse-complement a one-hot tensor ``(B, 4, L)`` via a flip on both axes."""
+    """Reverse-complement a one-hot NLC tensor ``(B, L, 4)``.
+
+    Flipping both trailing axes reverses position order (dim 1) and the ACGT
+    channel order (dim 2), which together give the reverse complement.
+    """
     import torch
 
     if seq.dim() == 2:
@@ -71,7 +75,12 @@ class SeqLoader:
         return self.genome.get_reference_length(chrom)
 
     def get_seq(self, chrom: str, tss: int, strand: str, ohe: bool = True):
-        """One-hot ``(1, 4, rf)`` window centred on ``tss``, strand-corrected.
+        """One-hot ``(1, rf, 4)`` window centred on ``tss``, strand-corrected.
+
+        The AlphaGenome pytorch port takes **NLC** input (B, S, 4), whereas
+        tangermeme's ``one_hot_encode`` returns channels-first (4, L) -- so we
+        transpose. Passing (B, 4, L) makes the port's internal rearrange feed the
+        stem Conv1d 1,048,576 "channels" and it raises.
 
         On the minus strand the returned sequence is reverse-complemented so the
         gene reads 5'->3', matching the AlphaGenome track convention.
@@ -91,7 +100,12 @@ class SeqLoader:
 
         seq = ("N" * pad_lo) + self.genome.fetch(chrom, start, end).upper() + ("N" * pad_hi)
         if ohe:
-            seq = one_hot_encode(seq, force=True).unsqueeze(0)
+            # (4, L) channels-first int8 -> (1, L, 4) float32 NLC, as the AG port
+            # expects (mirrors seq2func_crispri_eval datasets.py swapaxes(1, 2)).
+            import torch
+
+            seq = (one_hot_encode(seq, force=True)
+                   .T.contiguous().unsqueeze(0).to(torch.float32))
         if strand == "-":
             seq = reverse_complement(seq) if ohe else seq[::-1]
         return seq
