@@ -18,6 +18,7 @@
 #SBATCH --time=48:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:h100:1
 #SBATCH --mem=96G
 #SBATCH --qos=koolab
@@ -30,6 +31,12 @@
 set -euo pipefail
 
 NUM_SHARDS=8
+
+# --export=ALL propagates the SUBMITTING shell's SLURM_* vars. If you sbatch from
+# inside an interactive allocation, SLURM_TRES_PER_TASK leaks in and conflicts with
+# this job's SLURM_CPUS_PER_TASK ("cpus_per_task set by two different environment
+# variables"). Scrub them; this job is a single task so it needs no srun anyway.
+unset SLURM_TRES_PER_TASK SLURM_CPUS_PER_TASK SLURM_EXPORT_ENV 2>/dev/null || true
 
 echo "Job ID: ${SLURM_JOB_ID:-}  Array task: ${SLURM_ARRAY_TASK_ID:-}"
 echo "Node: ${SLURM_JOB_NODELIST:-}"
@@ -61,7 +68,7 @@ SHARD_OUT="${PROJ_ROOT}/out/ag_k562_baseline_shard${SLURM_ARRAY_TASK_ID}of${NUM_
 [[ -f "${METADATA_PATH}" ]] || { echo "ERROR: missing ${METADATA_PATH}"; exit 1; }
 [[ -e "${GENOME_CACHE}/hg38.fa" ]] || { echo "ERROR: missing ${GENOME_CACHE}/hg38.fa (symlink it; do not let 8 shards race to download)"; exit 1; }
 
-srun python scripts/1_baseline/run_ag_k562_baseline.py \
+python scripts/1_baseline/run_ag_k562_baseline.py \
   --coords "${COORDS}" \
   --metadata_path "${METADATA_PATH}" \
   --genome_cache "${GENOME_CACHE}" \
