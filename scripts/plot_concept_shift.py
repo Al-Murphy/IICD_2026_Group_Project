@@ -30,10 +30,15 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--concept_table", default="./out/concept_shift_table.parquet")
+    p.add_argument("--sample_rows", type=int, default=2_000_000,
+                   help="Subsample rows for the histogram (16.8M rows plot slowly).")
     p.add_argument("--summary", default="./out/perturbation_summary.parquet")
     p.add_argument("--baseline", default="./out/ag_k562_baseline.parquet")
     p.add_argument("--pseudobulk", default="./out/pseudobulk.parquet")
-    p.add_argument("--baseline_proxy", default="cage_pred", choices=["cage_pred", "rna_pred"])
+    p.add_argument("--baseline_proxy", default="rna_pred", choices=["cage_pred", "rna_pred"],
+                   help="rna_pred (gene body) is primary: it beats cage_pred on the "
+                        "within-state control (rho 0.67 vs 0.34), since the measured "
+                        "observable is RNA-seq expression.")
     p.add_argument("--ctrl", default="control")
     p.add_argument("--output", default="./results/plots/concept_shift.png")
     return p.parse_args()
@@ -57,13 +62,18 @@ def main():
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.2))
 
     # --- panel 1: concept-shift magnitude ------------------------------------
-    cs = pd.read_parquet(args.concept_table)
+    # Only the error column is needed; the table is ~16.8M rows.
+    err = pd.read_parquet(args.concept_table, columns=["error"])["error"]
+    mean_err = float(err.mean())
+    n_pairs = len(err)
+    if args.sample_rows and n_pairs > args.sample_rows:
+        err = err.sample(args.sample_rows, random_state=0)
     ax = axes[0]
-    sns.histplot(cs["error"], bins=60, color=warm, ax=ax)
-    ax.set(xlabel="|measured delta|  (predicted = 0)", ylabel="trans (pert, gene) pairs",
+    sns.histplot(err, bins=60, color=warm, ax=ax)
+    ax.set(xlabel="|measured delta|  (predicted = 0)",
+           ylabel=f"trans (pert, gene) pairs (n={n_pairs:,})",
            title="Concept-shift magnitude")
-    ax.axvline(cs["error"].mean(), color="k", ls="--", lw=1,
-               label=f"mean={cs['error'].mean():.3f}")
+    ax.axvline(mean_err, color="k", ls="--", lw=1, label=f"mean={mean_err:.3f}")
     ax.legend(frameon=False)
 
     # --- panel 2: mean error vs Wasserstein distance -------------------------

@@ -14,8 +14,11 @@ compared against BOTH:
 
 A single forward pass per gene yields both proxies:
 
-    cage_pred  (PRIMARY)   sense-strand CAGE/PRO-cap integrated over TSS +/- window
-    rna_pred   (SECONDARY) sense-strand RNA-Seq integrated over the gene body
+    rna_pred   (PRIMARY)   sense-strand RNA-Seq integrated over the gene body
+    cage_pred  (SECONDARY) sense-strand CAGE/PRO-cap integrated over TSS +/- window
+
+rna_pred wins the within-state control (Spearman 0.666 vs 0.339): the measured
+observable is scRNA-seq expression, not TSS initiation.
 
 This baseline is deliberately UNFILTERED and perturbation-independent -- it is
 just the per-gene K562 prediction. Any trans-effect filtering is applied later

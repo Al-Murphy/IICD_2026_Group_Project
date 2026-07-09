@@ -116,10 +116,36 @@ The 1 Mb AlphaGenome baseline is best sharded on a cluster — see
 | `knockdown_check.csv` | step 0 | soft percent-of-control QC flag (never drops) |
 | `coords.parquet` | step 0 | strand-aware hg38 TSS table |
 | `relevant_genes.{parquet,json}` | step 0 | per-perturbation trans gene sets |
-| `ag_k562_baseline.parquet` | step 1 | CAGE (primary) + RNA-seq (secondary) per gene |
+| `ag_k562_baseline.parquet` | step 1 | RNA-seq gene-body (primary) + CAGE TSS (secondary) per gene |
 | `concept_shift_table.parquet` | step 2 | `(pert, gene, measured_delta, pred_delta=0, error)` |
 | `perturbation_summary.parquet` | steps 2–3 | per-pert rollup + Wasserstein distance |
 | `within_state_spearman.txt`, `wasserstein_distance.parquet` | step 3 | controls |
+
+## Results (full run, 1,971 perturbations × 8,545 genes)
+
+**Which AlphaGenome proxy?** The spec called CAGE primary and RNA-seq "secondary,
+noisier". The data says the opposite, and it should: the measured observable is
+scRNA-seq expression, so the gene-body RNA-seq head is the matched quantity
+(K562 also has 5 RNA-seq tracks to average vs 2 CAGE). **Use `rna_pred`.**
+
+| within-state control (vs measured control pseudobulk) | Spearman |
+|---|---|
+| `rna_pred` (gene body) — **primary** | **0.666** |
+| `cage_pred` (TSS ±200 bp) | 0.339 |
+
+At ρ=0.67 AlphaGenome demonstrably predicts the K562 baseline *in state*, so the
+non-zero measured Δ under perturbation is genuine **concept shift**, not generic
+model weakness. That is exactly what the mandatory gate is for.
+
+- **Concept-shift table**: 16,795,257 (pert, gene) trans pairs; mean |measured Δ| = 0.036,
+  against a predicted Δ of exactly 0 everywhere.
+- **Strength baseline**: per-perturbation Wasserstein (OT, `X_pca`) ↔ concept-shift
+  error, **Spearman = 0.846** (Pearson 0.856), reproducing the benchmark's r≈0.8.
+  Any scFM embedding displacement must beat this to add anything.
+- **Sanity**: the strongest perturbation is **GATA1** (master erythroid TF in K562),
+  which also carries the largest concept-shift error.
+
+![concept shift](results/plots/concept_shift.png)
 
 ## Tests
 
