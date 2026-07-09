@@ -70,6 +70,14 @@ def parse_args():
     p.add_argument("--proxy", default="rna_pred", choices=["rna_pred", "cage_pred"])
     p.add_argument("--calibration", default="isotonic", choices=["isotonic", "linear", "none"],
                    help="Map AG signal onto the measured scale, fitted on the control state.")
+    p.add_argument("--split_halves", default="./out/control_split_halves.parquet",
+                   help="Control-cell split halves. Calibration + gene selection use half A; "
+                        "dE is evaluated against held-out half B, so r and D share no noise. "
+                        "Falls back to the full control row if absent.")
+    p.add_argument("--keep_pct", type=float, default=100.0,
+                   help="Keep only genes in the bottom X%% of in-state |residual| -- i.e. genes "
+                        "AlphaGenome predicts well in the control state (the spec's clause). "
+                        "100 = no filtering.")
     p.add_argument("--no_exclude_cis", dest="exclude_cis", action="store_false",
                    help="Keep cis neighbours (default: excluded, +/- cis_window_bp).")
     p.add_argument("--cis_window_bp", type=int, default=2_000_000)
@@ -116,18 +124,34 @@ def main():
     kd = pd.read_csv(args.knockdown_csv)
     w = pd.read_parquet(args.wasserstein)["wasserstein"]
 
-    genes = [g for g in pb.columns if g in base.index]
+    # Split-half control: fit + select on A, evaluate against held-out B, so the
+    # calibration residual r and the measured delta D share no control-estimate noise.
+    halves = None
+    if args.split_halves and os.path.exists(args.split_halves):
+        halves = pd.read_parquet(args.split_halves)
+
+    if halves is not None:
+        genes = [g for g in pb.columns if g in base.index and g in halves.index]
+        y_fit = halves.loc[genes, "ctrl_A"].to_numpy(float)   # calibration + gene selection
+        y_ref = halves.loc[genes, "ctrl_B"].to_numpy(float)   # held-out control reference
+    else:
+        genes = [g for g in pb.columns if g in base.index]
+        y_fit = y_ref = pb.loc[CTRL, genes].to_numpy(float)
     perts = [p for p in pb.index if p != CTRL]
-    y = pb.loc[CTRL, genes].to_numpy(float)
     x = np.log1p(base.loc[genes, args.proxy].to_numpy(float))
 
-    pred = calibrate(x, y, args.calibration)
-    r = pred - y                                   # within-state calibration residual
+    pred = calibrate(x, y_fit, args.calibration)
+    r = pred - y_fit                               # within-state residual (from half A)
     Y = pb.loc[perts, genes].to_numpy(float)
-    D = Y - y[None, :]                             # measured delta
+    D = Y - y_ref[None, :]                         # measured delta vs held-out control
 
     m = trans_mask(perts, genes, coords, kd.set_index("pert")["target_var"].to_dict(),
                    args.exclude_cis, args.cis_window_bp)
+
+    # "genes AlphaGenome predicts acceptably in-state": bottom keep_pct of |r|.
+    if args.keep_pct < 100.0:
+        thr = np.percentile(np.abs(r), args.keep_pct)
+        m &= (np.abs(r) <= thr)[None, :]
     n_g = m.sum(1)
 
     E_ctrl = np.where(m, np.abs(r[None, :]), 0.0).sum(1)
@@ -148,16 +172,23 @@ def main():
     res.to_parquet(args.out)
 
     W = res["wasserstein"].to_numpy()
-    print(f"proxy={args.proxy}  calibration={args.calibration}  "
-          f"n_perturbations={len(res)}  genes/pert={n_g.min()}-{n_g.max()}")
-    print(f"mean |residual r| = {np.abs(r).mean():.4f}   mean |delta| = {np.abs(D[m]).mean():.4f}"
-          f"   ratio = {np.abs(r).mean() / np.abs(D[m]).mean():.1f}x\n")
+    sel = np.abs(r)[m.any(0)]
+    print(f"proxy={args.proxy}  calibration={args.calibration}  keep_pct={args.keep_pct}  "
+          f"split_half_control={halves is not None}")
+    print(f"n_perturbations={len(res)}  genes/pert={n_g.min()}-{n_g.max()}")
+    print(f"mean |residual r| = {sel.mean():.4f}   mean |delta| = {np.abs(D[m]).mean():.4f}"
+          f"   ratio = {sel.mean() / np.abs(D[m]).mean():.2f}x\n")
     print("Spearman vs Wasserstein (n=%d):" % len(res))
     for col in ["dE_sum", "dE_sq", "magnitude_sumD2", "directional_term", "sum_abs_delta"]:
         rho = spearmanr(res[col], W).statistic
         pr = pearsonr(res[col], W).statistic
         print(f"  {col:<18} Spearman={rho: .3f}   Pearson={pr: .3f}")
-    print(f"\nfraction of perturbations with dE_sum > 0: {100 * (res['dE_sum'] > 0).mean():.1f}%")
+
+    # Degeneracy check: as |r| -> 0, pred -> control and dE -> sum|D| (AG drops out).
+    deg = spearmanr(res["dE_sum"], res["sum_abs_delta"]).statistic
+    print(f"\ncorr(dE_sum, sum_abs_delta) = {deg:.3f}"
+          f"   <- ~1.0 means dE has degenerated to the AG-free magnitude")
+    print(f"fraction of perturbations with dE_sum > 0: {100 * (res['dE_sum'] > 0).mean():.1f}%")
     print(f"wrote {args.out}")
 
 
