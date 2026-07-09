@@ -17,34 +17,49 @@ because ``pred_delta == 0``: there AlphaGenome cancels out entirely, so that
 correlation (0.846) is between two summaries of the same expression data. Here
 AG's actual predicted values enter.
 
-Calibration
------------
-AG's ``rna_pred`` lives in raw AlphaGenome signal units; the pseudobulk is
-log1p(CP10K). To subtract them AG must be mapped onto the measured scale. We fit
-a monotone isotonic regression of measured CONTROL pseudobulk on ``log1p(AG)``
--- fitted in the control state only, so ``E_ctrl`` is the within-state error
-floor and ``dE_P`` measures departure from it. Isotonic is monotone, so it
-preserves the within-state Spearman (0.666) and does not invent structure.
+Putting AG and the pseudobulk on one scale
+------------------------------------------
+AG's ``rna_pred`` is raw AlphaGenome signal; the pseudobulk is log1p(CP10K).
 
-Result (see --help output of the summary): dE does NOT track Wasserstein
-(Spearman ~ -0.10). Writing AG's calibrated prediction as ``pred = pb_ctrl + r``
-(residual r) and ``D = pb_P - pb_ctrl``:
+* ``--space quantile`` (DEFAULT): rank-transform AG and every expression profile
+  across genes to [0,1]. Monotone, so the within-state Spearman (0.666) is
+  untouched. No fit, hence no shrinkage, and errors are homoscedastic.
+* ``--space expression``: fit a monotone isotonic map on the control state. This
+  fits the CONDITIONAL MEAN, so it shrinks (sd 0.39 vs measured 0.50) and
+  "under-predicts high-expressed genes" -- an artifact of the fit, not of AG. It
+  also makes |r| scale with expression (corr +0.33), which biases gene selection
+  toward low-expressed genes. In quantile space that correlation is -0.11.
 
-    dE(L1) = sum(|r - D| - |r|)              ~ -sum(sign(r) * D)   when |r| >> |D|
-    dE(L2) = sum(D^2) - 2*sum(r * D)         magnitude term + directional term
+No-leakage design: control cells are split in half. Calibration and gene
+selection use half A; dE is scored against held-out half B, so the residual r
+and the delta D share no control-estimate noise.
 
-Since mean|r| = 0.188 >> mean|D| = 0.036 (5.2x), the *directional* term dominates
-and cancels across genes. Its magnitude component ``sum(D^2)`` does correlate
-(Spearman 0.870) -- that is the strength signal. The directional component is
-negative because strong perturbations compress the transcriptome (high-expressed
-genes go down) toward AG's under-dispersed prediction.
+Results (n = 1,971)
+-------------------
+                          space=expression    space=quantile
+  dE, all genes                  -0.103            +0.480
+  dE, keep_pct=10                +0.803            +0.746
+  corr(dE, sum|D|) @ 10%          0.999             0.999
+
+Writing pred = ctrl + r and D = pb_P - ctrl:
+
+    dE(L1) = sum(|r - D| - |r|)   ~ -sum(sign(r)*D)   when |r| >> |D|  (cancels)
+                                  ->  sum|D| - sum|r| when |r| << |D|  (magnitude)
+
+So filtering to genes AG predicts well flips the sign -- not a selection artifact
+(random subsets of equal size stay ~ -0.09). BUT corr(dE, sum|D|) -> 1.000: as
+|r| -> 0 the prediction converges to the control profile and dE degenerates to
+the AG-free magnitude. Because predicted delta == 0, AG enters only as a per-gene
+constant offset and carries no information about D; its accuracy governs how much
+it CORRUPTS the measured signal, never how much it adds. This holds in both spaces.
 
 Outputs: out/ag_error_shift.parquet  (per-perturbation dE, components, Wasserstein)
 
 Usage
 -----
-    python scripts/3_controls/ag_error_shift.py
-    python scripts/3_controls/ag_error_shift.py --proxy cage_pred --no_exclude_cis
+    python scripts/3_controls/ag_error_shift.py                       # quantile, all genes
+    python scripts/3_controls/ag_error_shift.py --keep_pct 10         # the spec's clause
+    python scripts/3_controls/ag_error_shift.py --space expression    # old default
 """
 
 import argparse
@@ -68,8 +83,15 @@ def parse_args():
     p.add_argument("--knockdown_csv", default="./out/knockdown_check.csv")
     p.add_argument("--wasserstein", default="./out/wasserstein_distance.parquet")
     p.add_argument("--proxy", default="rna_pred", choices=["rna_pred", "cage_pred"])
+    p.add_argument("--space", default="quantile", choices=["quantile", "expression"],
+                   help="quantile: rank-transform AG and every expression profile to [0,1] "
+                        "-- no calibration fit, no shrinkage, homoscedastic, and AG's accuracy "
+                        "stops correlating with expression level (corr 0.33 -> -0.11). "
+                        "expression: log1p(CP10K) units, needs --calibration.")
     p.add_argument("--calibration", default="isotonic", choices=["isotonic", "linear", "none"],
-                   help="Map AG signal onto the measured scale, fitted on the control state.")
+                   help="Only used with --space expression. Isotonic fits the conditional mean, "
+                        "so it SHRINKS (sd 0.39 vs 0.50) and under-predicts high-expressed genes "
+                        "by construction -- an artifact of the fit, not of AlphaGenome.")
     p.add_argument("--split_halves", default="./out/control_split_halves.parquet",
                    help="Control-cell split halves. Calibration + gene selection use half A; "
                         "dE is evaluated against held-out half B, so r and D share no noise. "
@@ -139,11 +161,22 @@ def main():
         y_fit = y_ref = pb.loc[CTRL, genes].to_numpy(float)
     perts = [p for p in pb.index if p != CTRL]
     x = np.log1p(base.loc[genes, args.proxy].to_numpy(float))
-
-    pred = calibrate(x, y_fit, args.calibration)
-    r = pred - y_fit                               # within-state residual (from half A)
     Y = pb.loc[perts, genes].to_numpy(float)
-    D = Y - y_ref[None, :]                         # measured delta vs held-out control
+
+    if args.space == "quantile":
+        # Rank-transform every profile across genes -> [0,1]. Monotone, so the
+        # within-state Spearman is untouched, but scale/heteroscedasticity cannot
+        # drive gene selection, and no calibration fit (hence no shrinkage) is needed.
+        from scipy.stats import rankdata
+
+        n = len(genes)
+        pred = rankdata(x) / n
+        r = pred - rankdata(y_fit) / n
+        D = np.vstack([rankdata(Y[i]) / n for i in range(len(perts))]) - (rankdata(y_ref) / n)[None, :]
+    else:
+        pred = calibrate(x, y_fit, args.calibration)
+        r = pred - y_fit                           # within-state residual (from half A)
+        D = Y - y_ref[None, :]                     # measured delta vs held-out control
 
     m = trans_mask(perts, genes, coords, kd.set_index("pert")["target_var"].to_dict(),
                    args.exclude_cis, args.cis_window_bp)
@@ -173,7 +206,7 @@ def main():
 
     W = res["wasserstein"].to_numpy()
     sel = np.abs(r)[m.any(0)]
-    print(f"proxy={args.proxy}  calibration={args.calibration}  keep_pct={args.keep_pct}  "
+    print(f"proxy={args.proxy}  space={args.space}  keep_pct={args.keep_pct}  "
           f"split_half_control={halves is not None}")
     print(f"n_perturbations={len(res)}  genes/pert={n_g.min()}-{n_g.max()}")
     print(f"mean |residual r| = {sel.mean():.4f}   mean |delta| = {np.abs(D[m]).mean():.4f}"
