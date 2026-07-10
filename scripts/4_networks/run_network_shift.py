@@ -63,6 +63,16 @@ def parse_args():
     p.add_argument("--wasserstein", default="./out/wasserstein_distance.parquet")
     p.add_argument("--h5ad", default="./out/replogle_k562_filtered.h5ad")
     p.add_argument("--proxy", default="rna_pred", choices=["rna_pred", "cage_pred"])
+    p.add_argument("--network", default="string",
+                   choices=["string", "gwps_k562", "gwps_rpe1"],
+                   help="string: physical/functional prior (non-circular). "
+                        "gwps_k562: empirical downstream response from Replogle's "
+                        "independent genome-wide screen, SAME cell line (circular by "
+                        "construction -> positive control). gwps_rpe1: same, but a "
+                        "DIFFERENT cell line -> cell-type-specificity control.")
+    p.add_argument("--top_n", type=int, default=100,
+                   help="gwps_*: take the top-N genes by |z| as the downstream network.")
+    p.add_argument("--gwps_cache", default="./.cache/gwps")
     p.add_argument("--string_cache", default="./.cache/string")
     p.add_argument("--min_score", type=int, default=700,
                    help="STRING combined score cutoff (400 loose / 700 default / 900 strict).")
@@ -100,18 +110,30 @@ def main():
     genes = ss.filter_genes(inp["pb"], inp["base"])
     target_map = inp["kd"].set_index("pert")["target_var"].to_dict()
 
-    edges = nw.load_string_edges(args.string_cache)
-    nb = nw.string_neighbours(edges, min_score=args.min_score, restrict_to=genes)
-    sizes = nw.network_size_table(nb, target_map, genes)
+    if args.network == "string":
+        edges = nw.load_string_edges(args.string_cache)
+        nb = nw.string_neighbours(edges, min_score=args.min_score, restrict_to=genes)
+        sizes = nw.network_size_table(nb, target_map, genes)
+        per_state_genes = nw.per_state_genes_from_network(
+            nb, target_map, genes, min_genes=args.min_genes,
+            max_genes=args.max_genes, edges=edges, min_score=args.min_score,
+        )
+        print(f"STRING >= {args.min_score}: {len(nb)} genes in the K562-active subnetwork")
+    else:
+        which = args.network.split("_")[1]
+        path = nw.download_gwps_bulk(which, args.gwps_cache)
+        z = nw.load_gwps_zscores(path, restrict_to=genes)
+        per_state_genes = nw.gwps_downstream_sets(
+            z, target_map, genes, top_n=args.top_n, min_genes=args.min_genes)
+        sizes = pd.DataFrame(
+            {"n_network_genes": {s: len(v) for s, v in per_state_genes.items()}}
+        ).rename_axis("state")
+        print(f"GWPS ({which}): {z.shape[0]} perturbations x {z.shape[1]} genes; "
+              f"top_n={args.top_n} by |z|")
+
     os.makedirs(os.path.dirname(os.path.abspath(args.sizes_out)), exist_ok=True)
     sizes.to_parquet(args.sizes_out)
-
-    per_state_genes = nw.per_state_genes_from_network(
-        nb, target_map, genes, min_genes=args.min_genes,
-        max_genes=args.max_genes, edges=edges, min_score=args.min_score,
-    )
-    print(f"STRING >= {args.min_score}: {len(nb)} genes in the K562-active subnetwork")
-    print(f"  target neighbourhood size: median {int(sizes.n_network_genes.median())}  "
+    print(f"  network size: median {int(sizes.n_network_genes.median())}  "
           f"max {int(sizes.n_network_genes.max())}")
     print(f"  states kept (>= {args.min_genes} network genes): {len(per_state_genes)}/{len(sizes)}")
 
@@ -163,7 +185,7 @@ def main():
     ax = axes[0]
     sns.histplot(res.n_network_genes, bins=40, color=grey, ax=ax)
     ax.set(xlabel="network genes per state", ylabel="states",
-           title=f"STRING >= {args.min_score} neighbourhood size")
+           title=f"{args.network} network size")
 
     ax = axes[1]
     sig = (res.z > 2).to_numpy()

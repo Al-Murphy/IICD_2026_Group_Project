@@ -156,3 +156,21 @@ def test_filter_genes_include_control_as_state(toy):
     assert "g5" in ss.filter_genes(pb, base, min_states_expressed=1)
     assert "g5" in ss.filter_genes(pb, base, min_states_expressed=1,
                                    include_control_as_state=True)
+
+
+def test_compare_strength_axes_ranks_axes():
+    res = pd.DataFrame({"d_rho_matched": [0.01, 0.02, 0.03, 0.04, 0.05]},
+                       index=[f"s{i}" for i in range(5)])
+    good = pd.Series([1.0, 2, 3, 4, 5], index=res.index)     # perfectly monotone
+    bad  = pd.Series([5.0, 1, 4, 2, 3], index=res.index)
+    tab = ss.compare_strength_axes(res, {"good": good, "bad": bad})
+    assert np.isclose(tab.loc["good", "spearman"], 1.0)
+    assert tab.loc["good", "spearman"] > tab.loc["bad", "spearman"]
+    assert (tab["n"] == 5).all()
+
+
+def test_compare_strength_axes_intersects_indices():
+    res = pd.DataFrame({"d_rho_matched": [0.1, 0.2, 0.3]}, index=["a", "b", "c"])
+    axis = pd.Series([1.0, 2.0], index=["a", "b"])           # missing 'c'
+    tab = ss.compare_strength_axes(res, {"partial": axis})
+    assert tab.loc["partial", "n"] == 2                      # only the common states

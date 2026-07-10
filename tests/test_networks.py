@@ -86,3 +86,19 @@ def test_matched_background_size_matched_when_decile_exhausted():
     bg = nw.matched_background(net, pb, genes, n_bins=10, seed=0)
     assert len(bg["s1"]) == 10                     # still size-matched
     assert not set(bg["s1"]) & set(net["s1"])
+
+
+def test_gwps_downstream_sets_picks_top_absolute_z():
+    z = pd.DataFrame(
+        [[0.0, 3.0, -4.0, 0.5, 0.1]],                        # target A's response profile
+        index=["A"], columns=["A", "B", "C", "D", "E"],
+    )
+    out = nw.gwps_downstream_sets(z, {"pA": "A", "pMiss": "ZZZ"},
+                                  ["A", "B", "C", "D", "E"], top_n=2, min_genes=2)
+    assert set(out) == {"pA"}                                # ZZZ not a GWPS perturbation
+    assert out["pA"] == ["C", "B"]                           # |−4| > |3| > rest; target kept for masks
+
+
+def test_gwps_downstream_sets_min_genes_filter():
+    z = pd.DataFrame([[2.0, 1.0]], index=["A"], columns=["A", "B"])
+    assert nw.gwps_downstream_sets(z, {"pA": "A"}, ["A", "B"], top_n=5, min_genes=5) == {}

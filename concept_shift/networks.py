@@ -62,6 +62,10 @@ __all__ = [
     "per_state_genes_from_network",
     "network_size_table",
     "matched_background",
+    "GWPS_FIGSHARE_ARTICLE",
+    "download_gwps_bulk",
+    "load_gwps_zscores",
+    "gwps_downstream_sets",
 ]
 
 STRING_LINKS_URL = (
@@ -243,4 +247,104 @@ def matched_background(per_state_genes: Mapping[str, Iterable[str]],
                           key=lambda g: abs(expr_rank[g] - target_rank))
             pick.extend(cand[:short])
         out[state] = pick
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Empirical downstream ("regulatory") networks from Replogle genome-wide Perturb-seq
+# ---------------------------------------------------------------------------
+GWPS_FIGSHARE_ARTICLE = 20029387
+GWPS_FILES = {
+    "k562": "K562_gwps_normalized_bulk_01.h5ad",   # 375 MB, same cell line as our screen
+    "rpe1": "rpe1_normalized_bulk_01.h5ad",        #  95 MB, DIFFERENT cell line -> control
+}
+
+
+def download_gwps_bulk(which: str = "k562", cache_dir: str = "./.cache/gwps") -> str:
+    """Download a Replogle 2022 pseudobulk matrix (perturbation x gene) from figshare.
+
+    ``which="k562"`` is the genome-wide screen in the SAME cell line as ours -- an
+    *independent* screen (different cells, guides, library), so it is not leakage
+    from the data we score. ``which="rpe1"`` is a different cell line entirely and
+    serves as a cell-type-specificity control.
+    """
+    import json
+    import urllib.request
+
+    if which not in GWPS_FILES:
+        raise ValueError(f"which must be one of {list(GWPS_FILES)}")
+    name = GWPS_FILES[which]
+    os.makedirs(cache_dir, exist_ok=True)
+    dest = os.path.join(cache_dir, name)
+    files = json.load(urllib.request.urlopen(
+        f"https://api.figshare.com/v2/articles/{GWPS_FIGSHARE_ARTICLE}/files"))
+    meta = next(f for f in files if f["name"] == name)
+    if os.path.exists(dest) and os.path.getsize(dest) == meta["size"]:
+        return dest
+    print(f"[networks] downloading {name} ({meta['size']/1e6:.0f} MB) ...")
+    urllib.request.urlretrieve(meta["download_url"], dest)
+    return dest
+
+
+def load_gwps_zscores(path: str, restrict_to: Optional[Iterable[str]] = None) -> pd.DataFrame:
+    """Perturbation x gene z-scores (symbols on both axes).
+
+    The published matrix is a fold-change-like signal (sd ~0.12), not z-scored, and
+    per-gene variance differs a lot. We therefore standardise **each gene column
+    across perturbations**, so "responds to X" means "moves more than this gene
+    usually moves", not "is a noisy gene". Rows sharing a target symbol (multiple
+    guides / promoters, e.g. ``P1``/``P1P2``) are averaged. Non-finite entries
+    (~0.007%) are dropped from the standardisation and set to 0.
+    """
+    import anndata as ad
+
+    a = ad.read_h5ad(path)
+    X = np.asarray(a.X, dtype=np.float64)
+    X[~np.isfinite(X)] = np.nan
+
+    gene_sym = a.var["gene_name"].astype(str).to_numpy()
+    pert_sym = np.array([i.split("_")[1] for i in a.obs_names])   # "0_A1BG_P1_ENSG..." -> A1BG
+
+    df = pd.DataFrame(X, index=pert_sym, columns=gene_sym)
+    df = df.loc[:, ~df.columns.duplicated()]
+    if restrict_to is not None:
+        keep = [g for g in df.columns if g in set(restrict_to)]
+        df = df[keep]
+    df = df.groupby(level=0).mean()                               # average guides per target
+
+    mu = df.mean(axis=0, skipna=True)
+    sd = df.std(axis=0, skipna=True).replace(0.0, np.nan)
+    z = (df - mu) / sd
+    return z.fillna(0.0)
+
+
+def gwps_downstream_sets(z: pd.DataFrame, target_map: Mapping[str, str],
+                         measured_genes: Iterable[str], *,
+                         top_n: int = 100, min_abs_z: float = 0.0,
+                         min_genes: int = 20) -> dict:
+    """``{state: [downstream genes]}`` = the genes that move most when the target is knocked down.
+
+    This is an *empirical regulatory network*: unlike STRING (physical/functional),
+    it captures the transcriptional response, which is what our readout measures.
+
+    .. warning::
+       Circular by construction. "Genes that respond to knocking down X" selected
+       from one screen, then scored on the response to knocking down X in another
+       screen, will show a large shift. Read it as a **positive control** for the
+       metric, and always against :func:`matched_background`. The independent
+       screen (and the RPE1 cross-cell-line variant) is what keeps it honest.
+    """
+    measured = set(measured_genes)
+    cols = [g for g in z.columns if g in measured]
+    zz = z[cols]
+    out = {}
+    for state, target in target_map.items():
+        if not isinstance(target, str) or target not in zz.index:
+            continue
+        row = zz.loc[target].abs()
+        if min_abs_z > 0:
+            row = row[row >= min_abs_z]
+        genes = row.nlargest(min(top_n, len(row))).index.tolist()
+        if len(genes) >= min_genes:
+            out[state] = genes
     return out

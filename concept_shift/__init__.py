@@ -51,6 +51,7 @@ from .networks import (
     string_neighbours,
 )
 from .state_shift import (
+    compare_strength_axes,
     compute_state_shift,
     filter_genes,
     load_inputs,
@@ -58,6 +59,7 @@ from .state_shift import (
     noise_floor_curve,
     plot_rho_vs_cells,
     plot_state_shift,
+    plot_strength_axes,
     state_gene_masks,
     state_spearman,
 )
@@ -85,6 +87,8 @@ __all__ = [
     "compute_state_shift",
     "plot_state_shift",
     "plot_rho_vs_cells",
+    "compare_strength_axes",
+    "plot_strength_axes",
     # networks
     "networks",
     "load_string_edges",

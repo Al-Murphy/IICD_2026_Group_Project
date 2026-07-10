@@ -81,6 +81,8 @@ __all__ = [
     "compute_state_shift",
     "plot_state_shift",
     "plot_rho_vs_cells",
+    "compare_strength_axes",
+    "plot_strength_axes",
 ]
 
 
@@ -452,5 +454,53 @@ def plot_state_shift(res: pd.DataFrame, floor: pd.Series):
 
     for a in axes:
         sns.despine(ax=a, top=True, right=True)
+    fig.tight_layout()
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Comparing strength axes (PCA vs scFM latent)
+# ---------------------------------------------------------------------------
+def compare_strength_axes(res: pd.DataFrame, axes: Mapping[str, pd.Series], *,
+                          shift_col: str = "d_rho_matched") -> pd.DataFrame:
+    """Correlate AG's concept shift against several strength axes (e.g. PCA vs scVI).
+
+    ``res`` is a per-state result from :func:`compute_state_shift`; ``axes`` maps a
+    label to a per-state distance Series (indexed by perturbation). Returns one row
+    per axis with Spearman / Pearson of ``shift_col`` against that axis, on the
+    states common to both. The winner is the axis whose displacement best predicts
+    where AlphaGenome degrades -- i.e. the space that best explains concept shift.
+    """
+    rows = []
+    for label, dist in axes.items():
+        common = res.index.intersection(dist.index)
+        x = res.loc[common, shift_col].to_numpy(float)
+        y = dist.reindex(common).to_numpy(float)
+        ok = np.isfinite(x) & np.isfinite(y)
+        rows.append({
+            "axis": label, "n": int(ok.sum()),
+            "spearman": spearmanr(x[ok], y[ok]).statistic,
+            "pearson": pearsonr(x[ok], y[ok]).statistic,
+        })
+    return pd.DataFrame(rows).set_index("axis")
+
+
+def plot_strength_axes(res: pd.DataFrame, axes: Mapping[str, pd.Series], *,
+                       shift_col: str = "d_rho_matched"):
+    """Scatter of AG concept shift vs each strength axis, one panel per axis."""
+    plt, sns, warm, cool, grey = _style()
+    labels = list(axes)
+    fig, ax_arr = plt.subplots(1, len(labels), figsize=(5.2 * len(labels), 4.2),
+                               squeeze=False)
+    for ax, label in zip(ax_arr[0], labels):
+        common = res.index.intersection(axes[label].index)
+        x = axes[label].reindex(common).to_numpy(float)
+        y = res.loc[common, shift_col].to_numpy(float)
+        rho = spearmanr(x, y).statistic
+        ax.scatter(x, y, s=14, alpha=.5, color=cool, edgecolor="none")
+        ax.axhline(0, color="k", lw=.8, ls="--")
+        ax.set(xlabel=f"{label} Wasserstein", ylabel=r"AG $\Delta\rho$ (matched)",
+               title=f"{label}\nSpearman = {rho:.3f}  (n={len(common)})")
+        sns.despine(ax=ax, top=True, right=True)
     fig.tight_layout()
     return fig
