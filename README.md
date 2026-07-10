@@ -65,6 +65,28 @@ looking like its DNA-encoded default.
 
 ![state shift](results/plots/ag_state_shift.png)
 
+### Where is the shift? Network of the perturbed gene
+
+Scoring AlphaGenome against the perturbed gene's network instead of all genes, vs a
+**size + expression-decile-matched random background** (network genes are ~2x more
+expressed, and expression alone moves rho):
+
+| network (step 4) | Δρ(net) − Δρ(background) | reading |
+|---|---|---|
+| **STRING** (physical/functional) | **−0.0048** (p=3e-07) | shift *depleted* — complex partners are transcriptionally buffered |
+| **GWPS K562** (empirical regulatory) | **+0.0142** (p=1.6e-42) | shift *concentrated* in the transcriptional-response network |
+
+So the concept shift lives in the *regulatory* network (genes that respond to the
+knockdown), invisible to the physical one. GWPS is response-derived (circular) — a
+positive control; `--network gwps_rpe1` is the cross-cell-line honest test.
+
+### Strength axis: PCA vs scVI
+
+The scFM team's OT distance on the scVI latent vs our PCA Wasserstein, as predictors
+of AG's concept shift (all genes, matched Δρ): scVI **Spearman 0.398 / Pearson 0.557**
+vs PCA **0.389 / 0.525** — scVI marginally better. The two axes agree at Spearman 0.94.
+`state_shift.compare_strength_axes` / `plot_strength_axes` do this for any set of axes.
+
 Which AlphaGenome head? The spec called CAGE primary and RNA-seq "secondary, noisier". The
 data says the opposite, and it should — the measured observable is scRNA-seq expression, so
 the **gene-body RNA-seq** head is the matched quantity (K562 also has 5 RNA-seq tracks to
@@ -98,14 +120,16 @@ so the scFM team installs only the core deps.
 ```
 concept_shift/
 ├── data.py          # ⭐ shared load / filter / pseudobulk / coords (torch-free)
-├── state_shift.py   # ⭐ the analysis: gene filters, per-state rho, matched null, plots
+├── state_shift.py   # ⭐ the analysis: per-state rho, matched null, plots, PCA-vs-scVI compare
+├── networks.py      #   STRING / GWPS networks of the perturbed gene (torch-free)
 ├── seq.py           #   hg38 genome fetch + one-hot        (AlphaGenome extra)
 └── ag_backbone.py   #   AlphaGenome pytorch-port baseline  (AlphaGenome extra)
 scripts/
 ├── 0_preprocess/prepare_data.py       # download -> filter -> pseudobulk -> coords
 ├── 1_baseline/run_ag_k562_baseline.py # one AG prediction per gene (GPU, resumable, shardable)
 ├── 2_wasserstein/run_wasserstein.py   # per-state OT distance = the strength axis
-└── 3_analysis/run_state_shift.py      # per-state rho + matched null + plots
+├── 3_analysis/run_state_shift.py      # per-state rho + matched null + plots
+└── 4_networks/run_network_shift.py    # concept shift on the perturbed gene's network (STRING/GWPS)
 metadata/track_metadata.parquet        # K562 AlphaGenome track indices
 tests/                                  # pytest (non-GPU, no weights, no network)
 examples/                               # run_all.sh + SLURM array templates
@@ -129,6 +153,7 @@ python scripts/0_preprocess/prepare_data.py
 python scripts/1_baseline/run_ag_k562_baseline.py   # GPU; shard it on a cluster
 python scripts/2_wasserstein/run_wasserstein.py
 python scripts/3_analysis/run_state_shift.py
+python scripts/4_networks/run_network_shift.py --network gwps_k562 --matched_background
 ```
 
 The 1 Mb baseline is best sharded — see [`examples/slurm_ag_baseline_array.sh`](examples/slurm_ag_baseline_array.sh)

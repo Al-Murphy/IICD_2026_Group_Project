@@ -23,6 +23,7 @@ Modules
 data          Shared load / filter / pseudobulk / coords (torch-free; the scFM
               team imports this to get an identical filtered cell x gene set).
 state_shift   The analysis: per-state Spearman, gene filtering, matched null, plots.
+networks      STRING functional networks -> per-state gene sets (torch-free).
 seq           hg38 genome fetch + one-hot (AlphaGenome extra only).
 ag_backbone   AlphaGenome pytorch-port K562 baseline (AlphaGenome extra only).
 
@@ -30,7 +31,7 @@ ag_backbone   AlphaGenome pytorch-port K562 baseline (AlphaGenome extra only).
 ``ag_backbone`` need the ``[alphagenome]`` extra and are imported lazily.
 """
 
-from . import state_shift
+from . import networks, state_shift
 from .data import (
     ConceptShiftData,
     prepare,
@@ -43,7 +44,14 @@ from .data import (
     knockdown_qc,
     coord_table,
 )
+from .networks import (
+    load_string_edges,
+    matched_background,
+    per_state_genes_from_network,
+    string_neighbours,
+)
 from .state_shift import (
+    compare_strength_axes,
     compute_state_shift,
     filter_genes,
     load_inputs,
@@ -51,6 +59,7 @@ from .state_shift import (
     noise_floor_curve,
     plot_rho_vs_cells,
     plot_state_shift,
+    plot_strength_axes,
     state_gene_masks,
     state_spearman,
 )
@@ -78,4 +87,12 @@ __all__ = [
     "compute_state_shift",
     "plot_state_shift",
     "plot_rho_vs_cells",
+    "compare_strength_axes",
+    "plot_strength_axes",
+    # networks
+    "networks",
+    "load_string_edges",
+    "string_neighbours",
+    "per_state_genes_from_network",
+    "matched_background",
 ]

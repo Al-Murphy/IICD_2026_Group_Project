@@ -1,34 +1,38 @@
 #!/usr/bin/env python3
 """
-Step 3 -- Mandatory controls (spec step 9).
+Step 2 -- Per-perturbation Wasserstein (OT) distance: the strength axis.
 
-(a) Within-state accuracy: Spearman of the AlphaGenome K562 baseline vs the
-    measured control pseudobulk across genes. Must be reasonably positive --
-    otherwise a non-zero "concept-shift error" is just generic in-state
-    weakness, not a genuine shift. This gate is what makes the result a concept
-    shift rather than a model failure.
+For each perturbed state, the optimal-transport distance between its cells and
+the control cells, in an embedding space. We use **Wasserstein** rather than
+E-distance to match the OT metric the scFM side applies on the scVI latent, so
+the strength axis is directly comparable. This is the magnitude any scFM
+embedding displacement must beat (cf. benchmark Fig. 5e, strength<->effect
+r~0.8): if the displacement does not out-predict raw Wasserstein, the foundation
+model adds nothing.
 
-(b) Wasserstein strength baseline: per-perturbation Wasserstein (optimal
-    transport) distance (control vs perturbed) via pertpy's Distance. We use
-    Wasserstein rather than E-distance to match the OT metric the scFM side
-    applies on the scVI latent, so the strength axis is directly comparable.
-    This is the magnitude axis any scFM embedding displacement must beat
-    (benchmark Fig. 5e: strength<->error r~0.8). If the displacement does not
-    out-predict the raw Wasserstein distance, the foundation model adds nothing.
+How it works
+------------
+The distances are **not stored in the AnnData** -- they are computed from it:
 
-    By default this runs on ``X_pca``; point ``--obsm_key`` at a scVI latent
-    (e.g. ``X_scVI``) written into the AnnData by the scFM team to compute it in
-    exactly their space.
+1. read ``out/replogle_k562_filtered.h5ad``;
+2. if ``--obsm_key`` is absent from ``adata.obsm``, compute it (``X_pca``, 50 PCs)
+   on the fly -- it is not cached back into the h5ad;
+3. ``pertpy.tools.Distance(metric="wasserstein", obsm_key=...)`` then
+   ``onesided_distances(groupby="perturbation", selected_group="control")``
+   gives every state's OT distance to control;
+4. drop the control-vs-control row and write the 1,971-row Series.
 
-Outputs:  out/within_state_spearman.txt
-          out/wasserstein_distance.parquet
-          (merged into out/perturbation_summary.parquet if present)
+To run in the scFM space instead, write the latent into ``adata.obsm["X_scVI"]``
+and pass ``--obsm_key X_scVI``; the PCA fallback then raises rather than silently
+using PCA.
+
+Output: out/wasserstein_distance.parquet  (read back by step 3 via
+        ``concept_shift.state_shift.load_inputs``)
 
 Usage
 -----
-    python scripts/3_controls/run_controls.py
-    python scripts/3_controls/run_controls.py --baseline_proxy rna_pred
-    python scripts/3_controls/run_controls.py --obsm_key X_scVI
+    python scripts/2_wasserstein/run_wasserstein.py
+    python scripts/2_wasserstein/run_wasserstein.py --obsm_key X_scVI
 """
 
 import argparse
@@ -55,7 +59,7 @@ def parse_args():
 
 
 def wasserstein_distances(h5ad_path, pert_col, ctrl, obsm_key, n_pcs):
-    """(b) Per-perturbation Wasserstein (OT) distance (perturbed vs control).
+    """Per-perturbation Wasserstein (OT) distance (perturbed vs control).
 
     Computed on ``obsm_key`` (default ``X_pca``; point at a scVI latent to match
     the scFM side). Uses the same metric the scFM team applies on scVI so the
