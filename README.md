@@ -57,10 +57,11 @@ perturbation strength (0.389), and it survives *because* `n_cells` barely tracks
 (−0.075).
 
 **AlphaGenome's gene-ranking accuracy is almost state-invariant**: a 0.75% relative loss on
-a base of 0.666. The concept shift is real and strength-dependent, but small. The
-most-degraded states are mechanistically coherent — RNA exosome (`DIS3`, `EXOSC3`, `EXOSC5`),
-spliceosome (`SNRPC`), ribosome (`RPL17`, `RPL27`): knock out RNA degradation or translation
-machinery and the transcriptome stops looking like its DNA-encoded default.
+a base of 0.666. The concept shift is real and strength-dependent, but small. The most-degraded
+states (by matched-null Δρ) are mechanistically coherent — Integrator (`INTS2`), ribosome
+(`RPL17`, `RPL27A`, `RPL36`), RNA exosome (`DIS3`), and `GATA1`, the master erythroid TF of K562:
+knock out RNA processing, degradation or translation machinery and the transcriptome stops
+looking like its DNA-encoded default.
 
 ![state shift](results/plots/ag_state_shift.png)
 
