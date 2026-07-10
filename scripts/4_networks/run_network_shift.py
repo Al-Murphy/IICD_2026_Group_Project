@@ -1,43 +1,46 @@
 #!/usr/bin/env python3
 """
-Step 4 -- Concept shift on each state's own gene network (STRING).
+Step 4 -- Concept shift on each state's own gene network.
 
 Instead of scoring AlphaGenome against all 8,545 genes, score it against the
-**functional neighbourhood of the perturbed gene** in that state. Hypothesis: the
-concept shift is concentrated in the perturbed gene's network, so d_rho should be
-larger there than on the transcriptome at large.
+network of the perturbed gene in that state, and ask whether the concept shift is
+concentrated there.
 
-Network
--------
-STRING v12 human, combined score >= ``--min_score``, restricted to edges whose
-both ends are measured/AG-scored in this screen (the K562-active subnetwork).
-STRING is a structure/function prior, not derived from perturbation responses, so
-restricting to it does not leak the answer.
+``--network`` picks the network kind:
 
-Only 162/1,791 targets are TFs, so TF-regulon resources would cover ~9% of the
-screen; a functional network covers essentially all of it.
+* ``string`` -- STRING v12 physical/functional neighbourhood (both edge ends
+  measured/AG-scored). A structure/function prior, NOT response-derived, so it
+  does not leak the answer. But it is not transcriptional: for the 91%-machinery
+  targets it is mostly the complex partners.
+* ``gwps_k562`` -- empirical *regulatory* network: the genes that respond most
+  (top-N by |z|) when the target is knocked down, from Replogle's INDEPENDENT
+  genome-wide Perturb-seq screen in the SAME cell line. Response-derived, hence
+  circular by construction -> read as a positive control for the metric.
+* ``gwps_rpe1`` -- same, but a DIFFERENT cell line: a cell-type-specificity
+  control (does a K562 shift track the RPE1 network?).
 
-Neighbourhood sizes: score>=700 gives a median of 41 genes per target and 1,306
-targets with >=20. A 41-gene rho has sd ~0.16, so per-state power is low -- read
-the aggregate. The per-state matched null (control subsampled to each state's own
-cell count AND scored on that state's own mask) absorbs both the cell-count and
-the set-size noise.
+The comparison that matters is against ``--matched_background`` (size + expression
+-decile-matched random genes), because network genes are systematically more
+expressed (STRING genes ~2x), and expression alone moves rho.
 
-Caveat (opt-in control)
------------------------
-Set size and expression level move rho on their own. ``--matched_background``
-additionally scores size- and expression-decile-matched random gene sets, so you
-can report ``d_rho(network) - d_rho(background)``. Off by default.
+Results (n = 1,306 STRING / 1,788 GWPS states, vs matched background):
+    STRING physical  : d_rho(net) - d_rho(bg) = -0.0048 (p=3e-07)   shift DEPLETED
+    GWPS regulatory  : d_rho(net) - d_rho(bg) = +0.0142 (p=1.6e-42)  shift CONCENTRATED
+So the concept shift lives in the transcriptional-response network, invisible to
+the physical one.
 
-Outputs: out/ag_network_shift.parquet
-         out/ag_network_sizes.parquet
+The per-state matched null (control subsampled to each state's own cell count AND
+scored on that state's own gene mask) absorbs both the cell-count and set-size
+noise; a ~40-100 gene rho still has sd ~0.1-0.16, so read the aggregate.
+
+Outputs: out/ag_network_shift.parquet, out/ag_network_sizes.parquet,
          results/plots/ag_network_shift.png
 
 Usage
 -----
-    python scripts/4_networks/run_network_shift.py
-    python scripts/4_networks/run_network_shift.py --min_score 400 --min_genes 50
     python scripts/4_networks/run_network_shift.py --matched_background
+    python scripts/4_networks/run_network_shift.py --network gwps_k562 --matched_background
+    python scripts/4_networks/run_network_shift.py --network gwps_rpe1 --matched_background
 """
 
 import argparse
@@ -53,7 +56,7 @@ from concept_shift import state_shift as ss
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Concept shift scored on each perturbed gene's STRING neighbourhood.",
+        description="Concept shift scored on each perturbed gene's network (STRING or GWPS).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--baseline", default="./out/ag_k562_baseline.parquet")
