@@ -34,22 +34,16 @@ Usage
 import argparse
 import os
 
-import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr
 
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Concept-shift mandatory controls (within-state Spearman + E-distance).",
+        description="Per-perturbation Wasserstein (OT) distance vs control.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--filtered_h5ad", default="./out/replogle_k562_filtered.h5ad")
     p.add_argument("--pseudobulk", default="./out/pseudobulk.parquet")
-    p.add_argument("--baseline", default="./out/ag_k562_baseline.parquet",
-                   help="AG baseline parquet (skips 9a if absent).")
-    p.add_argument("--baseline_proxy", default="cage_pred", choices=["cage_pred", "rna_pred"])
-    p.add_argument("--summary", default="./out/perturbation_summary.parquet")
     p.add_argument("--pert_col", default="perturbation")
     p.add_argument("--ctrl", default="control")
     p.add_argument("--obsm_key", default="X_pca",
@@ -58,23 +52,6 @@ def parse_args():
     p.add_argument("--n_pcs", type=int, default=50)
     p.add_argument("--out_dir", default="./out")
     return p.parse_args()
-
-
-def within_state_spearman(baseline_path, pb_path, ctrl, proxy):
-    """(a) Spearman of AG baseline vs measured control pseudobulk across genes."""
-    if not os.path.exists(baseline_path):
-        print(f"[controls] baseline not found ({baseline_path}); skipping within-state Spearman")
-        return None
-    base = pd.read_parquet(baseline_path)
-    pb = pd.read_parquet(pb_path)
-    common = [g for g in base.index if g in pb.columns]
-    pred = base.loc[common, proxy].values
-    meas = pb.loc[ctrl, common].values
-    ok = np.isfinite(pred) & np.isfinite(meas)
-    rho, pval = spearmanr(pred[ok], meas[ok])
-    print(f"[controls] within-state Spearman ({proxy} vs control pb): "
-          f"rho={rho:.4f}, p={pval:.2e}, n={int(ok.sum())} genes")
-    return {"proxy": proxy, "rho": float(rho), "pval": float(pval), "n_genes": int(ok.sum())}
 
 
 def wasserstein_distances(h5ad_path, pert_col, ctrl, obsm_key, n_pcs):
@@ -95,7 +72,7 @@ def wasserstein_distances(h5ad_path, pert_col, ctrl, obsm_key, n_pcs):
                 f"obsm_key {obsm_key!r} not in AnnData.obsm "
                 f"(available: {list(adata.obsm)}). Write the scFM latent first."
             )
-        print(f"[controls] computing PCA ({n_pcs} PCs) for Wasserstein ...")
+        print(f"[wasserstein] computing PCA ({n_pcs} PCs) for Wasserstein ...")
         sc.pp.pca(adata, n_comps=n_pcs)
 
     dist = pt.tools.Distance(metric="wasserstein", obsm_key=obsm_key)
@@ -104,7 +81,7 @@ def wasserstein_distances(h5ad_path, pert_col, ctrl, obsm_key, n_pcs):
     wd = pd.Series(wd).rename("wasserstein")
     wd.index.name = "pert"
     wd = wd[wd.index != ctrl]
-    print(f"[controls] Wasserstein computed for {len(wd)} perturbations on "
+    print(f"[wasserstein] Wasserstein computed for {len(wd)} perturbations on "
           f"{obsm_key} (median={wd.median():.3f})")
     return wd
 
@@ -113,22 +90,10 @@ def main():
     args = parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
 
-    ws = within_state_spearman(args.baseline, args.pseudobulk, args.ctrl, args.baseline_proxy)
-    if ws is not None:
-        with open(os.path.join(args.out_dir, "within_state_spearman.txt"), "w") as fh:
-            fh.write(f"proxy={ws['proxy']}\nspearman_rho={ws['rho']}\n"
-                     f"pval={ws['pval']}\nn_genes={ws['n_genes']}\n")
-
     wd = wasserstein_distances(args.filtered_h5ad, args.pert_col, args.ctrl,
                                args.obsm_key, args.n_pcs)
     wd.to_frame().to_parquet(os.path.join(args.out_dir, "wasserstein_distance.parquet"))
 
-    # Merge Wasserstein distance into the perturbation summary if it exists.
-    if os.path.exists(args.summary):
-        summ = pd.read_parquet(args.summary)
-        summ = summ.join(wd, how="left")
-        summ.to_parquet(args.summary)
-        print(f"[controls] merged wasserstein into {args.summary}")
 
 
 if __name__ == "__main__":

@@ -98,6 +98,7 @@ echo "End time: $(date)"
 #   print(base.head())
 #   PY
 #
-# Then run the mandatory controls (within-state Spearman + Wasserstein):
-#   .venv/bin/python scripts/3_controls/run_controls.py
+# Then run Wasserstein + the per-state concept-shift analysis:
+#   .venv/bin/python scripts/2_wasserstein/run_wasserstein.py
+#   .venv/bin/python scripts/3_analysis/run_state_shift.py
 # =============================================================================

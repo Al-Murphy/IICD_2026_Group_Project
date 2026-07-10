@@ -24,7 +24,6 @@ Pipeline (matches ``specs.md`` steps 1-7)
 4. ``pseudobulk_delta``     -- per-perturbation mean, measured delta vs control
 5. ``knockdown_qc``         -- percent-of-control knockdown flag (soft; never drops)
 6. ``coord_table``          -- strand-aware hg38 TSS per gene, valid chromosomes only
-7. ``relevant_gene_sets``   -- per-perturbation trans DE gene set (excl. target + cis)
 
 ``prepare`` runs the whole thing and returns a :class:`ConceptShiftData` bundle,
 optionally caching the filtered AnnData + tables to disk for fast reload.
@@ -82,9 +81,6 @@ class ConceptShiftData:
     coords : pd.DataFrame
         Per-gene strand-aware hg38 coordinates (subset of ``adata.var`` on valid
         chromosomes) with an added integer ``tss`` column. Index = var_names.
-    relevant_genes : dict[str, list[str]]
-        ``{perturbation: [trans gene var_names]}`` -- DE vs control, excluding
-        the target gene and its +/- cis-window neighbours, valid hg38 only.
     pert_to_ens : dict[str, str]
         Perturbation label -> target Ensembl gene id.
     ens_to_var : dict[str, str]
@@ -99,7 +95,6 @@ class ConceptShiftData:
     ctrl_expr: pd.Series
     knockdown_qc: pd.DataFrame
     coords: pd.DataFrame
-    relevant_genes: dict = field(default_factory=dict)
     pert_to_ens: dict = field(default_factory=dict)
     ens_to_var: dict = field(default_factory=dict)
     pert_col: str = DEFAULT_PERT_COL
@@ -296,122 +291,22 @@ def coord_table(adata) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Step 7 -- relevant (trans) gene set per perturbation
-# ---------------------------------------------------------------------------
-def _rank_genes(adata, pert_col, ctrl, method="wilcoxon"):
-    """Run scanpy DE of every perturbation group vs the control reference.
-
-    Returns a dict ``{group: DataFrame[names, logfoldchanges, pvals_adj]}``.
-    This is ONE scanpy call over all groups (not per-perturbation).
-    """
-    import scanpy as sc
-
-    groups = [g for g in adata.obs[pert_col].unique() if g != ctrl]
-    print(f"[data] rank_genes_groups ({method}) for {len(groups)} groups vs {ctrl!r} ...")
-    sc.tl.rank_genes_groups(
-        adata, groupby=pert_col, groups=list(groups), reference=ctrl,
-        method=method, pts=False,
-    )
-    res = adata.uns["rank_genes_groups"]
-    out = {}
-    for g in groups:
-        out[g] = pd.DataFrame({
-            "names": res["names"][g],
-            "logfoldchanges": res["logfoldchanges"][g],
-            "pvals_adj": res["pvals_adj"][g],
-        })
-    return out
-
-
-def relevant_gene_sets(adata, coords, pert_to_ens, ens_to_var,
-                       pert_col: str = DEFAULT_PERT_COL, ctrl: str = DEFAULT_CTRL,
-                       cis_window_bp: int = DEFAULT_CIS_WINDOW_BP,
-                       alpha: float = 0.05, min_abs_lfc: float = 0.0,
-                       top_n: Optional[int] = None, method: str = "wilcoxon") -> dict:
-    """Per-perturbation trans gene set for the concept-shift table.
-
-    For each perturbation ``P`` (target ``g_P``):
-
-    1. DE genes vs control (significant at ``pvals_adj < alpha`` AND
-       ``|logfoldchanges| >= min_abs_lfc``; optionally the top ``top_n`` by
-       absolute logFC).
-    2. Exclude the target gene ``g_P``.
-    3. Exclude *cis* neighbours: any gene on the target's chromosome whose TSS
-       is within ``+/- cis_window_bp`` of the target TSS (KRAB spreading).
-    4. Keep only genes with valid hg38 coordinates (present in ``coords``).
-
-    Returns ``{P: [var_names]}``. Perturbations whose target has no valid
-    coordinates keep the DE/cis logic that can still be applied (target
-    excluded by id; cis skipped with a warning).
-    """
-    de = _rank_genes(adata, pert_col, ctrl, method=method)
-    valid_genes = set(coords.index)
-
-    relevant = {}
-    n_no_target_coord = 0
-    for P, df in de.items():
-        sig = df[(df["pvals_adj"] < alpha) & (df["logfoldchanges"].abs() >= min_abs_lfc)]
-        if top_n is not None:
-            sig = sig.reindex(sig["logfoldchanges"].abs().sort_values(ascending=False).index)
-            sig = sig.head(top_n)
-        genes = [g for g in sig["names"].tolist() if g in valid_genes]
-
-        # (2) exclude the target gene itself
-        target_ens = str(pert_to_ens.get(P))
-        target_var = ens_to_var.get(target_ens)
-        genes = [g for g in genes if g != target_var]
-
-        # (3) exclude cis neighbours around the target TSS
-        if target_var is not None and target_var in coords.index:
-            t_chr = str(coords.loc[target_var, "chr"])
-            t_tss = int(coords.loc[target_var, "tss"])
-            same_chr = coords.index[coords["chr"].astype(str) == t_chr]
-            cis = set(
-                coords.loc[same_chr].index[
-                    (coords.loc[same_chr, "tss"].astype(int) - t_tss).abs() <= cis_window_bp
-                ]
-            )
-            genes = [g for g in genes if g not in cis]
-        else:
-            n_no_target_coord += 1
-
-        relevant[P] = genes
-
-    if n_no_target_coord:
-        warnings.warn(
-            f"{n_no_target_coord} perturbations had no valid target coords; "
-            "cis-neighbour exclusion skipped for those (target still excluded by id)."
-        )
-    total = sum(len(v) for v in relevant.values())
-    print(f"[data] relevant gene sets: {len(relevant)} perturbations, "
-          f"{total} (pert, gene) trans pairs total")
-    return relevant
-
-
-# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 def prepare(cache_h5ad: Optional[str] = None,
             filtered_h5ad: Optional[str] = None,
             min_cells: int = DEFAULT_MIN_CELLS,
-            pert_col: str = DEFAULT_PERT_COL, ctrl: str = DEFAULT_CTRL,
-            cis_window_bp: int = DEFAULT_CIS_WINDOW_BP,
-            alpha: float = 0.05, min_abs_lfc: float = 0.0,
-            top_n: Optional[int] = None, de_method: str = "wilcoxon",
-            compute_relevant: bool = True) -> ConceptShiftData:
-    """Run the full state-side pipeline (spec steps 1-7).
+            pert_col: str = DEFAULT_PERT_COL,
+            ctrl: str = DEFAULT_CTRL) -> ConceptShiftData:
+    """Run the full state-side pipeline (load -> filter -> pseudobulk -> QC -> coords).
 
     Parameters
     ----------
     cache_h5ad : str, optional
-        Path for the RAW pertpy download cache.
+        Path for the RAW scPerturb download cache.
     filtered_h5ad : str, optional
         Path for the FILTERED+normalised AnnData cache. If it exists it is
         loaded directly (skipping load/normalise/filter).
-    compute_relevant : bool
-        If False, skip the (slow) DE step and return an empty
-        ``relevant_genes`` dict -- useful for the scFM team when they only need
-        the filtered cells + pseudobulk.
 
     Returns
     -------
@@ -437,17 +332,10 @@ def prepare(cache_h5ad: Optional[str] = None,
     kd = knockdown_qc(pb, ctrl_expr, pert_to_ens, ens_to_var, ctrl=ctrl)
     coords = coord_table(adata_f)
 
-    relevant = {}
-    if compute_relevant:
-        relevant = relevant_gene_sets(
-            adata_f, coords, pert_to_ens, ens_to_var,
-            pert_col=pert_col, ctrl=ctrl, cis_window_bp=cis_window_bp,
-            alpha=alpha, min_abs_lfc=min_abs_lfc, top_n=top_n, method=de_method,
-        )
 
     return ConceptShiftData(
         adata=adata_f, pb=pb, delta=delta, ctrl_expr=ctrl_expr,
-        knockdown_qc=kd, coords=coords, relevant_genes=relevant,
+        knockdown_qc=kd, coords=coords,
         pert_to_ens=pert_to_ens, ens_to_var=ens_to_var,
         pert_col=pert_col, ctrl=ctrl,
     )

@@ -2,29 +2,35 @@
 concept_shift
 =============
 
-Concept-shift pipeline for the Replogle 2022 K562-essential CRISPRi screen
-crossed with a state-blind AlphaGenome baseline.
+Concept-shift analysis of the Replogle 2022 K562-essential CRISPRi screen
+against a state-blind AlphaGenome baseline.
 
 Core idea
 ---------
 AlphaGenome predicts expression from DNA sequence only. A knockdown does not
-change any downstream gene's sequence, so AlphaGenome's predicted delta for
-every (perturbation, gene) pair is exactly 0. The measured non-zero delta from
-the screen is the concept-shift signal. AlphaGenome is therefore run ONCE per
-gene for a K562 baseline and reused across all perturbations -- never inside a
-per-perturbation loop.
+change any downstream gene's sequence, so AlphaGenome makes the SAME prediction
+in every cell state. It is therefore run once per gene for a K562 baseline and
+reused across all 1,971 perturbations -- never inside a per-perturbation loop.
+
+The question is then: **does AlphaGenome's accuracy degrade as the cell state
+shifts away from control?** We answer it per state with a Spearman correlation
+against that state's measured pseudobulk, excluding the perturbed gene, and
+correct for the cell-count confound with a matched null. See
+:mod:`concept_shift.state_shift`.
 
 Modules
 -------
-data          Shared load / filter / pseudobulk / relevant-gene-sets (spec steps 1-7).
-              Pure -- no torch / AlphaGenome deps; used by the scFM team too.
+data          Shared load / filter / pseudobulk / coords (torch-free; the scFM
+              team imports this to get an identical filtered cell x gene set).
+state_shift   The analysis: per-state Spearman, gene filtering, matched null, plots.
 seq           hg38 genome fetch + one-hot (AlphaGenome extra only).
 ag_backbone   AlphaGenome pytorch-port K562 baseline (AlphaGenome extra only).
 
-The ``data`` API is imported eagerly; ``seq`` / ``ag_backbone`` are imported
-lazily so the package works without the ``[alphagenome]`` extra installed.
+``data`` and ``state_shift`` import without torch / AlphaGenome; ``seq`` and
+``ag_backbone`` need the ``[alphagenome]`` extra and are imported lazily.
 """
 
+from . import state_shift
 from .data import (
     ConceptShiftData,
     prepare,
@@ -36,10 +42,21 @@ from .data import (
     build_target_maps,
     knockdown_qc,
     coord_table,
-    relevant_gene_sets,
+)
+from .state_shift import (
+    compute_state_shift,
+    filter_genes,
+    load_inputs,
+    matched_null,
+    noise_floor_curve,
+    plot_rho_vs_cells,
+    plot_state_shift,
+    state_gene_masks,
+    state_spearman,
 )
 
 __all__ = [
+    # data
     "ConceptShiftData",
     "prepare",
     "load_replogle",
@@ -50,5 +67,15 @@ __all__ = [
     "build_target_maps",
     "knockdown_qc",
     "coord_table",
-    "relevant_gene_sets",
+    # state_shift
+    "state_shift",
+    "load_inputs",
+    "filter_genes",
+    "state_gene_masks",
+    "state_spearman",
+    "matched_null",
+    "noise_floor_curve",
+    "compute_state_shift",
+    "plot_state_shift",
+    "plot_rho_vs_cells",
 ]

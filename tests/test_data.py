@@ -1,4 +1,4 @@
-"""Unit tests for concept_shift.data (spec steps 1-7)."""
+"""Unit tests for concept_shift.data."""
 
 import numpy as np
 import pandas as pd
@@ -58,16 +58,3 @@ def test_coord_table_strand_and_valid_chr(tiny_adata):
     assert coords.loc["g3", "tss"] == 1_002_000   # - strand -> end
 
 
-def test_relevant_gene_sets_excludes_target_and_cis(tiny_adata):
-    data.ensure_normalised(tiny_adata)
-    coords = data.coord_table(tiny_adata)
-    p2e, e2v = data.build_target_maps(tiny_adata)
-    rel = data.relevant_gene_sets(
-        tiny_adata, coords, p2e, e2v, alpha=0.5, cis_window_bp=2_000_000
-    )
-    # Pert A: target g0 excluded; g1 is cis (<2Mb) excluded; g2 trans retained.
-    assert "g0" not in rel["A"]
-    assert "g1" not in rel["A"]
-    assert "g2" in rel["A"]
-    # No invalid-chr gene ever appears.
-    assert all("g5" not in genes for genes in rel.values())

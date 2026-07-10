@@ -7,7 +7,8 @@ def test_public_api():
     for name in [
         "ConceptShiftData", "prepare", "load_replogle", "detect_normalisation",
         "ensure_normalised", "filter_min_cells", "pseudobulk_delta",
-        "build_target_maps", "knockdown_qc", "coord_table", "relevant_gene_sets",
+        "build_target_maps", "knockdown_qc", "coord_table",
+        "compute_state_shift", "filter_genes", "state_gene_masks", "state_spearman",
     ]:
         assert hasattr(concept_shift, name), f"missing export: {name}"
 
