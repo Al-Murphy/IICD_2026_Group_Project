@@ -486,20 +486,34 @@ def compare_strength_axes(res: pd.DataFrame, axes: Mapping[str, pd.Series], *,
 
 
 def plot_strength_axes(res: pd.DataFrame, axes: Mapping[str, pd.Series], *,
-                       shift_col: str = "d_rho_matched"):
-    """Scatter of AG concept shift vs each strength axis, one panel per axis."""
+                       shift_col: str = "d_rho_matched", sign: int = 1,
+                       ylabel: Optional[str] = None, sharey: bool = True):
+    """Scatter of AG concept shift vs each strength axis, one panel per axis.
+
+    ``sign``: +1 (default) plots the degradation ``d_rho = rho_ctrl - rho_pert``
+    (up = AG worse). ``sign=-1`` plots the signed performance change
+    ``rho_pert - rho_ctrl`` (down = AG worse), so a drop reads as a negative value.
+    The reported Spearman flips sign with ``sign`` (correlation of x with -y).
+
+    ``ylabel`` overrides the y-axis label. The y-values are identical across
+    panels, so the label is drawn on the leftmost panel only.
+    """
     plt, sns, warm, cool, grey = _style()
     labels = list(axes)
+    if ylabel is None:
+        ylabel = (r"AG $\Delta\rho$ (matched)" if sign > 0
+                  else "AlphaGenome performance change\n" r"$\rho_{pert}-\rho_{ctrl}$")
     fig, ax_arr = plt.subplots(1, len(labels), figsize=(5.2 * len(labels), 4.2),
-                               squeeze=False)
-    for ax, label in zip(ax_arr[0], labels):
+                               squeeze=False, sharey=sharey)
+    for i, (ax, label) in enumerate(zip(ax_arr[0], labels)):
         common = res.index.intersection(axes[label].index)
         x = axes[label].reindex(common).to_numpy(float)
-        y = res.loc[common, shift_col].to_numpy(float)
+        y = sign * res.loc[common, shift_col].to_numpy(float)
         rho = spearmanr(x, y).statistic
         ax.scatter(x, y, s=14, alpha=.5, color=cool, edgecolor="none")
         ax.axhline(0, color="k", lw=.8, ls="--")
-        ax.set(xlabel=f"{label} Wasserstein", ylabel=r"AG $\Delta\rho$ (matched)",
+        ax.set(xlabel=f"{label} Wasserstein distance",
+               ylabel=ylabel if i == 0 else "",
                title=f"{label}\nSpearman = {rho:.3f}  (n={len(common)})")
         sns.despine(ax=ax, top=True, right=True)
     fig.tight_layout()
