@@ -71,7 +71,7 @@ def main():
 
     fig = ss.plot_strength_axes(res, axes, shift_col=args.shift_col, sign=args.sign)
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    fig.savefig(args.out, dpi=200, bbox_inches="tight")
+    fig.savefig(args.out, dpi=1000, bbox_inches="tight")
     print(f"\nwrote {args.out}  (sign={args.sign:+d}, "
           f"{'signed performance change' if args.sign < 0 else 'degradation d_rho'})")
 
