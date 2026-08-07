@@ -173,7 +173,7 @@ def main():
     matplotlib.use("Agg")
     fig = ss.plot_state_shift(res, floor)
     os.makedirs(os.path.dirname(os.path.abspath(args.plot)), exist_ok=True)
-    fig.savefig(args.plot, dpi=200, bbox_inches="tight")
+    fig.savefig(args.plot, dpi=1000, bbox_inches="tight")
     print(f"\nwrote {args.out}, {args.floor_out} and {args.plot}")
 
 

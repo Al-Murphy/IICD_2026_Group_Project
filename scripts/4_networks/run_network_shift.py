@@ -217,7 +217,7 @@ def main():
         sns.despine(ax=a, top=True, right=True)
     fig.tight_layout()
     os.makedirs(os.path.dirname(os.path.abspath(args.plot)), exist_ok=True)
-    fig.savefig(args.plot, dpi=200, bbox_inches="tight")
+    fig.savefig(args.plot, dpi=1000, bbox_inches="tight")
     print(f"\nwrote {args.out}, {args.sizes_out} and {args.plot}")
 
 
